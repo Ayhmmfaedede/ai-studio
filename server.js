@@ -1,10 +1,15 @@
 import "dotenv/config";
 import express from "express";
 import OpenAI from "openai";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 const app = express();
 const port = Number(process.env.PORT || 3001);
 app.use(express.json({ limit: "12mb" }));
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const distPath = path.join(__dirname, "dist");
 
 const apiKey = process.env.OPENAI_API_KEY;
 const client = apiKey ? new OpenAI({ apiKey }) : null;
@@ -88,6 +93,15 @@ app.post("/api/answer", async (req, res) => {
       error: "تعذّر الحصول على إجابة الآن. تحقّق من مفتاح API واسم النموذج وإعدادات حسابك، ثم حاول مجددًا."
     });
   }
+});
+
+// Serve the built React website from the same service on Render.
+app.use(express.static(distPath));
+app.get("*", (req, res, next) => {
+  if (req.path.startsWith("/api/")) return next();
+  res.sendFile(path.join(distPath, "index.html"), (err) => {
+    if (err) next(err);
+  });
 });
 
 app.listen(port, () => {
