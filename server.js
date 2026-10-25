@@ -97,6 +97,10 @@ app.post("/api/answer", async (req, res) => {
 
 // Serve the built React website from the same service on Render.
 app.use(express.static(distPath));
+app.get("/", (_req, res) => {
+  res.sendFile(path.join(distPath, "index.html"));
+});
+
 app.get("*", (req, res, next) => {
   if (req.path.startsWith("/api/")) return next();
   res.sendFile(path.join(distPath, "index.html"), (err) => {
