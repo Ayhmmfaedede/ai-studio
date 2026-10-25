@@ -7,25 +7,24 @@ import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 
 const app = express();
-const port = Number(process.env.PORT || 3001);
+const port = Number(process.env.PORT || 10000);
+const rootDir = path.dirname(fileURLToPath(import.meta.url));
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
+app.disable("x-powered-by");
+app.use(express.json({ limit: "12mb" }));
 
-// Find the built website without changing the project structure.
-const possibleDistPaths = [
-  path.resolve(__dirname, "dist"),
+// Locate the built frontend.
+const candidates = [
+  path.resolve(rootDir, "dist"),
   path.resolve(process.cwd(), "dist"),
 ];
 
 const distPath =
-  possibleDistPaths.find((dir) =>
+  candidates.find((dir) =>
     fs.existsSync(path.join(dir, "index.html"))
-  ) || possibleDistPaths[0];
+  ) || candidates[0];
 
 const indexPath = path.join(distPath, "index.html");
-
-app.disable("x-powered-by");
-app.use(express.json({ limit: "12mb" }));
 
 const apiKey = process.env.OPENAI_API_KEY;
 const client = apiKey ? new OpenAI({ apiKey }) : null;
@@ -41,11 +40,15 @@ app.get("/api/health", (_req, res) => {
 app.post("/api/answer", async (req, res) => {
   if (!client) {
     return res.status(503).json({
-      error: "مفتاح API غير مُعدّ. أضف OPENAI_API_KEY في Environment على Render.",
+      error: "مفتاح API غير مُعدّ. أضف OPENAI_API_KEY في Render Environment.",
     });
   }
 
-  const { question, imageDataUrl, preferences = {} } = req.body ?? {};
+  const {
+    question,
+    imageDataUrl,
+    preferences = {},
+  } = req.body ?? {};
 
   if (
     (!question || !String(question).trim()) &&
@@ -87,7 +90,7 @@ app.post("/api/answer", async (req, res) => {
     examples:
       "Give the direct answer first, then explain it in Arabic with helpful examples.",
     teach:
-      "Guide the user with a small hint or question before revealing the answer. Use Arabic for guidance unless the user asks for the full answer.",
+      "Guide the user with a small hint before revealing the answer. Use Arabic for guidance unless the user requests the full answer.",
   };
 
   const languages = {
@@ -116,20 +119,18 @@ app.post("/api/answer", async (req, res) => {
     ? preferences.detail
     : "medium";
 
-  const followupOnly = Boolean(preferences.followupOnly);
-
   const prompt = [
     "You are a helpful, accurate assistant for students and the general public.",
     languages[answerLanguage],
     details[detailLevel],
-    followupOnly
-      ? "Explain the previous answer simply in Arabic. Avoid repeating it unless needed."
+    preferences.followupOnly
+      ? "Explain the previous answer simply in Arabic. Do not repeat it unless needed."
       : modes[answerMode],
     "If information is missing or an image is unclear, say so honestly. Do not invent facts.",
-    "Return plain text. Do not include the labels ANSWER or ARABIC_EXPLANATION.",
+    "Return plain text without labels such as ANSWER or ARABIC_EXPLANATION.",
   ].join("\n");
 
-  const userContent = [
+  const content = [
     {
       type: "input_text",
       text:
@@ -140,7 +141,7 @@ app.post("/api/answer", async (req, res) => {
   ];
 
   if (imageDataUrl) {
-    userContent.push({
+    content.push({
       type: "input_image",
       image_url: imageDataUrl,
     });
@@ -149,7 +150,7 @@ app.post("/api/answer", async (req, res) => {
   try {
     const response = await client.responses.create({
       model: process.env.OPENAI_MODEL || "gpt-4.1-mini",
-      input: [{ role: "user", content: userContent }],
+      input: [{ role: "user", content }],
       max_output_tokens: 1800,
     });
 
@@ -157,60 +158,58 @@ app.post("/api/answer", async (req, res) => {
 
     if (!answer) {
       return res.status(502).json({
-        error: "وصل رد فارغ. جرّب إرسال السؤال مرة ثانية.",
+        error: "لم يصل رد من النموذج. جرّب مرة أخرى.",
       });
     }
 
     return res.json({ answer });
   } catch (error) {
-    console.error(
-      "OpenAI request failed:",
-      error?.status || "",
-      error?.message || error
-    );
+    console.error("OpenAI request failed:", {
+      status: error?.status,
+      code: error?.code,
+      message: error?.message,
+    });
 
     return res.status(500).json({
-      error:
-        "تعذّر الحصول على إجابة. تحقّق من مفتاح API، واسم النموذج، ورصيد حساب API، ثم حاول مجددًا.",
+      error: "تعذّرت الإجابة. راجع سجلات Render لمعرفة سبب الخطأ.",
     });
   }
 });
 
-// Serve the built website.
+// Serve frontend assets.
 app.use(express.static(distPath));
 
 app.get("/", (_req, res, next) => {
   if (!fs.existsSync(indexPath)) {
-    console.error("Built index.html was not found.", {
-      cwd: process.cwd(),
-      serverDirectory: __dirname,
-      checkedPaths: possibleDistPaths,
+    console.error("Frontend build missing:", {
+      rootDir,
+      workingDirectory: process.cwd(),
+      distPath,
+      checkedDirectories: candidates,
     });
 
     return res.status(503).send(
-      "The website files are missing. Please check the Render build logs."
+      "Website build files are missing. Check the Render build configuration."
     );
   }
 
-  res.sendFile(indexPath, (error) => {
-    if (error) next(error);
+  res.sendFile(indexPath, (err) => {
+    if (err) next(err);
   });
 });
 
-// Support frontend routes without intercepting API requests.
+// Support frontend routes without swallowing API routes.
 app.get("*", (req, res, next) => {
   if (req.path.startsWith("/api/")) {
     return next();
   }
 
   if (!fs.existsSync(indexPath)) {
-    return res.status(503).send(
-      "The website files are missing. Please check the Render build logs."
-    );
+    return res.status(503).send("Website build files are missing.");
   }
 
-  res.sendFile(indexPath, (error) => {
-    if (error) next(error);
+  res.sendFile(indexPath, (err) => {
+    if (err) next(err);
   });
 });
 
@@ -224,8 +223,9 @@ app.use((err, _req, res, _next) => {
   });
 });
 
-app.listen(port, () => {
-  console.log(`AI Studio API running on port ${port}`);
-  console.log(`Website build directory: ${distPath}`);
-  console.log(`Website index exists: ${fs.existsSync(indexPath)}`);
+app.listen(port, "0.0.0.0", () => {
+  console.log(`AI Studio listening on port ${port}`);
+  console.log(`Working directory: ${process.cwd()}`);
+  console.log(`Frontend directory: ${distPath}`);
+  console.log(`Frontend index exists: ${fs.existsSync(indexPath)}`);
 });
