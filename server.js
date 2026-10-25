@@ -40,7 +40,7 @@ app.get("/api/health", (_req, res) => {
 app.post("/api/answer", async (req, res) => {
   if (!client) {
     return res.status(503).json({
-      error: "مفتاح API غير مُعدّ. أضف OPENAI_API_KEY في Render Environment.",
+      error: "مفتاح API غير مُعدّ في إعدادات Render.",
     });
   }
 
@@ -164,12 +164,15 @@ app.post("/api/answer", async (req, res) => {
 
     return res.json({ answer });
   } catch (error) {
+    // Diagnostic details are written to Render logs only.
     console.error("OpenAI request failed:", {
-      status: error?.status,
-      code: error?.code,
-      message: error?.message,
+      status: error?.status ?? null,
+      code: error?.code ?? null,
+      type: error?.type ?? null,
+      message: error?.message ?? "No error message",
     });
 
+    // Keep internal API details out of the public response.
     return res.status(500).json({
       error: "تعذّرت الإجابة. راجع سجلات Render لمعرفة سبب الخطأ.",
     });
@@ -198,7 +201,6 @@ app.get("/", (_req, res, next) => {
   });
 });
 
-// Support frontend routes without swallowing API routes.
 app.get("*", (req, res, next) => {
   if (req.path.startsWith("/api/")) {
     return next();
